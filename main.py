@@ -29,7 +29,7 @@ async def handle_media(client, message):
     processing = await message.reply("🔄 Uploading to secure storage…")
 
     # Forward file to private channel
-    uploaded = await message.forward(CHANNEL_ID)
+    uploaded = await message.forward(int(CHANNEL_ID))
 
     # Correct chat and message ID extraction
     chat_id = uploaded.chat.id
