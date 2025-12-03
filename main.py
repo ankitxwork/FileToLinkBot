@@ -4,7 +4,7 @@ import os
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])  # Your private channel ID
+CHANNEL_ID = str(os.environ["CHANNEL_ID"])  # keep as string!
 
 app = Client(
     "FileToLinkBot",
