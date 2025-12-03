@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
 import os
 import sys
-import shutil
 import logging
-import asyncio
-import tempfile
-import uuid
-from pathlib import Path
 
 from pyrogram import Client, filters
-from pyrogram.errors import RPCError
-
-# ---------------------------
-# Remove stale session
-# ---------------------------
-for f in ("FileToLinkBot.session", "FileToLinkBot.session-journal"):
-    if os.path.exists(f):
-        try:
-            os.remove(f)
-            print(f"DEBUG: Removed old session {f}")
-        except:
-            pass
 
 # ---------------------------
 # Logging
@@ -56,7 +39,7 @@ app = Client(
 )
 
 # ---------------------------
-# Helpers
+# HELPER
 # ---------------------------
 def tme_c_link(chat_id, msg_id):
     s = str(chat_id)
@@ -64,47 +47,24 @@ def tme_c_link(chat_id, msg_id):
         return f"https://t.me/c/{s[4:]}/{msg_id}"
     return f"https://t.me/c/{s}/{msg_id}"
 
-async def check_admin(client: Client, chat_id: int):
-    try:
-        me = await client.get_me()
-        m = await client.get_chat_member(chat_id, me.id)
-        return m.status in ("administrator", "creator")
-    except:
-        return False
-
 # ---------------------------
-# Startup event (Correct for Pyrogram v2)
-# ---------------------------
-@app.on_start()
-async def startup(client):
-    log.info("DEBUG: Running startup checks...")
-    ok = await check_admin(client, CHANNEL_ID)
-    if not ok:
-        log.error("❌ Bot is NOT admin in CHANNEL_ID. Forwarding will fail.")
-    else:
-        log.info("✅ Bot is admin in storage chat.")
-
-# ---------------------------
-# Start/help
+# Commands
 # ---------------------------
 @app.on_message(filters.private & filters.command(["start", "help"]))
-async def start(client, message):
-    await message.reply("Send me any video/file and I'll create a streaming link!")
+async def start(_, message):
+    await message.reply("Send me any video/file and I will create a streaming link!")
 
 # ---------------------------
-# File Forward Handler
+# File Handler
 # ---------------------------
 @app.on_message(filters.private & (filters.video | filters.document))
-async def handle_media(client: Client, message):
-    log.info("Incoming media from %s", message.from_user.id)
-
+async def handle_media(client, message):
     status = await message.reply("🔄 Uploading to secure storage…")
 
     try:
         forwarded = await message.forward(CHANNEL_ID)
     except Exception as e:
-        await status.edit(f"❌ Forward failed: `{e}`")
-        return
+        return await status.edit(f"❌ Forward failed:\n`{e}`")
 
     link = tme_c_link(forwarded.chat.id, forwarded.id)
 
