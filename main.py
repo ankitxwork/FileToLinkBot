@@ -1,33 +1,17 @@
 import os
 print("DEBUG: Starting bot...")
 
-try:
-    API_ID = int(os.environ["API_ID"])
-    print("DEBUG: API_ID loaded:", API_ID)
-except Exception as e:
-    print("ERROR loading API_ID:", e)
-    raise
+API_ID = int(os.environ["API_ID"])
+print("DEBUG: API_ID loaded:", API_ID)
 
-try:
-    API_HASH = os.environ["API_HASH"]
-    print("DEBUG: API_HASH loaded")
-except Exception as e:
-    print("ERROR loading API_HASH:", e)
-    raise
+API_HASH = os.environ["API_HASH"]
+print("DEBUG: API_HASH loaded")
 
-try:
-    BOT_TOKEN = os.environ["BOT_TOKEN"]
-    print("DEBUG: BOT_TOKEN loaded:", BOT_TOKEN[:10], "...")
-except Exception as e:
-    print("ERROR loading BOT_TOKEN:", e)
-    raise
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+print("DEBUG: BOT_TOKEN loaded:", BOT_TOKEN[:10], "...")
 
-try:
-    CHANNEL_ID = os.environ["CHANNEL_ID"]
-    print("DEBUG: CHANNEL_ID loaded:", CHANNEL_ID)
-except Exception as e:
-    print("ERROR loading CHANNEL_ID:", e)
-    raise
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+print("DEBUG: CHANNEL_ID loaded:", CHANNEL_ID)
 
 from pyrogram import Client, filters
 
@@ -40,11 +24,19 @@ app = Client(
 
 @app.on_message(filters.private & (filters.video | filters.document))
 async def handle_media(client, message):
+
     processing = await message.reply("🔄 Uploading to secure storage…")
-    uploaded = await message.forward(int(CHANNEL_ID))
-    clean_id = CHANNEL_ID.replace("-100", "")
-    link = f"https://t.me/c/{clean_id}/{uploaded.id}"
-    await processing.edit(f"🎬 Streaming Link:\n`{link}`")
+
+    uploaded = await message.forward(CHANNEL_ID)
+
+    chat_id = uploaded.chat.id
+    msg_id = uploaded.id
+
+    link = f"https://t.me/c/{str(chat_id)[4:]}/{msg_id}"
+
+    await processing.edit(
+        f"🎬 **Streaming Link:**\n`{link}`"
+    )
 
 @app.on_message(filters.command(["start", "help"]))
 async def start(client, message):
