@@ -8,117 +8,103 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])   # your storage channel (must be admin)
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
 logging.info("🚀 Bot Started Successfully!")
 
-# -------------------------------
-# PYROGRAM CLIENT
-# -------------------------------
-app = Client(
-    "CDNFileBot",
+# ----------------------------
+# PYROGRAM BOT CLIENT
+# ----------------------------
+bot = Client(
+    "cdn_bot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
-# -------------------------------
-# FLASK SERVER FOR RAILWAY
-# -------------------------------
+# ----------------------------
+# FLASK SERVER (RAILWAY)
+# ----------------------------
 server = Flask(__name__)
 
 @server.route("/")
 def home():
     return "Bot Running Successfully!"
 
-# -------------------------------
-# /start
-# -------------------------------
-@app.on_message(filters.command("start"))
-async def start(client, message):
-    await message.reply(
+# ----------------------------
+# START COMMAND
+# ----------------------------
+@bot.on_message(filters.command("start"))
+async def start(_, msg):
+    await msg.reply(
         "**Send me any file and I will give you:**\n\n"
         "✔ Telegram CDN Streaming Link\n"
         "✔ Direct Download Link\n"
         "✔ File Name\n"
         "✔ File Size\n\n"
-        "Works with ALL FILES (even forwarded)."
+        "Works with ALL FILES — even forwarded 💯"
     )
 
-# -------------------------------
-# FILE HANDLER (ALL MEDIA)
-# -------------------------------
-@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def handle_file(client, message):
+# ----------------------------
+# FILE HANDLER
+# ----------------------------
+@bot.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def handler(client, message):
 
     status = await message.reply("Saving securely… 📦")
 
-    # Extract file info
-    if message.document:
-        file_name = message.document.file_name
-        file_size = message.document.file_size
-    elif message.video:
-        file_name = message.video.file_name or "video.mp4"
-        file_size = message.video.file_size
-    elif message.audio:
-        file_name = message.audio.file_name
-        file_size = message.audio.file_size
-    else:
-        file_name = "file"
-        file_size = 0
+    # Detect file + size
+    media = message.document or message.video or message.audio
+    file_name = media.file_name or "file"
+    file_size = media.file_size
 
-    # -------------------------------
-    # STEP 1: DOWNLOAD FILE LOCALLY
-    # -------------------------------
-    file_path = await message.download()
-
-    # -------------------------------
-    # STEP 2: UPLOAD FRESH TO STORAGE CHANNEL
-    # -------------------------------
-    uploaded = await client.send_document(
-        CHANNEL_ID,
-        file_path,
-        caption=file_name
-    )
-
-    # Delete local file to save space
+    # ----------------------------
+    # UPLOAD WITHOUT DOWNLOADING
+    # This avoids railway storage problems
+    # ----------------------------
     try:
-        os.remove(file_path)
-    except:
-        pass
+        sent = await client.copy_message(
+            chat_id=CHANNEL_ID,
+            from_chat_id=message.chat.id,
+            message_id=message.id
+        )
+    except Exception as e:
+        await status.edit(f"❌ Upload failed.\n\nError: `{e}`")
+        return
 
-    # -------------------------------
-    # STEP 3: GENERATE TELEGRAM CDN LINK
-    # -------------------------------
-    cdn_link = await client.get_file_url(uploaded)
+    # ----------------------------
+    # GET CDN DIRECT LINK
+    # ----------------------------
+    try:
+        cdn_link = await client.get_file_url(sent)
+    except Exception as e:
+        await status.edit(f"❌ Failed generating CDN link.\nError: `{e}`")
+        return
 
-    # Download link is same CDN link
-    download_link = cdn_link
-
-    # -------------------------------
-    # FINAL RESULT MESSAGE
-    # -------------------------------
+    # ----------------------------
+    # SEND RESULT
+    # ----------------------------
     text = f"""
-**🎬 File Processed Successfully!**
+**🎬 File Ready!**
 
 📌 **File Name:** `{file_name}`
 📦 **File Size:** `{round(file_size / (1024*1024), 2)} MB`
 
-🔗 **Streaming Link (Telegram CDN):**
+🔗 **Streaming Link (Telegram CDN):**  
 {cdn_link}
 
-⬇️ **Direct Download Link:**
-{download_link}
+⬇️ **Direct Download Link:**  
+{cdn_link}
 
-_File saved securely in private storage channel._
+_File stored safely in your private channel._
 """
 
     await status.edit(text)
 
-# -------------------------------
-# RUN SERVER + BOT
-# -------------------------------
+# ----------------------------
+# RUN BOTH
+# ----------------------------
 if __name__ == "__main__":
     import threading
     threading.Thread(target=lambda: server.run(host="0.0.0.0", port=8080)).start()
-    app.run()
+    bot.run()
