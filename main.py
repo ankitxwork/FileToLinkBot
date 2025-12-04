@@ -2,91 +2,93 @@ import os
 import logging
 from pyrogram import Client, filters
 from flask import Flask
-import threading
 
-# -------------------- LOGGING --------------------
-logging.basicConfig(
-    format="%(asctime)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
-# -------------------- ENV VARIABLES --------------------
-API_ID = int(os.getenv("API_ID"))
-API_HASH = os.getenv("API_HASH")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # storage channel
+API_ID = int(os.environ["API_ID"])
+API_HASH = os.environ["API_HASH"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-# -------------------- FLASK KEEP ALIVE --------------------
-app_web = Flask(__name__)
+logging.info("Bot Started Successfully!")
 
-@app_web.route("/")
-def index():
-    return "Bot is running!"
-
-def run_flask():
-    app_web.run(host="0.0.0.0", port=8080)
-
-def keep_alive():
-    thread = threading.Thread(target=run_flask)
-    thread.start()
-
-# -------------------- TELEGRAM BOT --------------------
+# -------------------------------
+# PYROGRAM BOT CLIENT
+# -------------------------------
 app = Client(
-    "bot_session",
+    "CDNFileBot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
+# -------------------------------
+# FLASK SERVER (FOR RAILWAY)
+# -------------------------------
+server = Flask(__name__)
 
-# Convert bytes → MB
-def size_in_mb(size):
-    return round(size / (1024 * 1024), 2)
+@server.route("/")
+def home():
+    return "Bot Running Successfully!"
 
+# -------------------------------
+# COMMAND: /start
+# -------------------------------
+@app.on_message(filters.command("start"))
+async def start(client, message):
+    await message.reply(
+        "**Send me any file and I will give you:**\n\n"
+        "✔ Streaming link (Telegram CDN)\n"
+        "✔ Download link\n"
+        "✔ File name\n"
+        "✔ File size"
+    )
 
-# -------------------- HANDLER --------------------
-@app.on_message(filters.private & (filters.video | filters.document | filters.audio))
-async def media_handler(bot, message):
-    try:
-        logging.info("Media received... forwarding to storage channel")
+# -------------------------------
+# HANDLE MEDIA
+# -------------------------------
+@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def handle_file(client, message):
 
-        # Forward to your storage channel
-        forwarded = await message.forward(CHANNEL_ID)
+    status = await message.reply("Uploading to Telegram CDN… 🔄")
 
-        file = forwarded.video or forwarded.document or forwarded.audio
+    # Save file info
+    file_name = message.document.file_name if message.document else (
+                 message.video.file_name if message.video else (
+                 message.audio.file_name if message.audio else "file"))
 
-        file_id = file.file_id
-        file_name = file.file_name or "Unknown"
-        file_size = size_in_mb(file.file_size)
+    file_size = message.document.file_size if message.document else (
+                message.video.file_size if message.video else (
+                message.audio.file_size if message.audio else 0))
 
-        # Direct Telegram CDN link
-        stream_link = await bot.get_file_url(file_id)
+    # Upload to private storage channel
+    uploaded = await message.forward(CHANNEL_ID)
 
-        # Direct download link
-        file_info = await bot.get_file(file_id)
-        download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+    # Get Telegram CDN direct link
+    cdn_link = await client.get_file_url(uploaded)
 
-        # Send formatted message
-        reply_text = f"""
-🎬 **File Name:** {file_name}
-📦 **Size:** {file_size} MB
+    # Build download link (same as CDN link)
+    download_link = cdn_link
 
-▶ **Streaming Link:**  
-{stream_link}
+    text = f"""
+**🎬 File Processed Successfully**
 
-⬇ **Download Link:**  
+📌 **File Name:** `{file_name}`
+📦 **File Size:** `{round(file_size / (1024*1024), 2)} MB`
+
+🔗 **Streaming Link (CDN):**
+{cdn_link}
+
+⬇️ **Direct Download Link:**
 {download_link}
-        """
+"""
 
-        await message.reply_text(reply_text, disable_web_page_preview=True)
+    await status.edit(text)
 
-    except Exception as e:
-        logging.error(f"Error: {e}")
-        await message.reply_text("❌ Error occurred while processing this file.")
-
-
-# -------------------- START --------------------
+# -------------------------------
+# RUN BOTH (Flask + Pyrogram)
+# -------------------------------
 if __name__ == "__main__":
-    keep_alive()
-    logging.info("Bot Started Successfully!")
+    import threading
+    threading.Thread(target=lambda: server.run(host="0.0.0.0", port=8080)).start()
     app.run()
