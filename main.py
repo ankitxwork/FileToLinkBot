@@ -16,83 +16,80 @@ logging.info("Bot Started Successfully!")
 # PYROGRAM BOT CLIENT
 # -------------------------------
 app = Client(
-    "TelegramFileCDN",
+    "DirectLinkBot",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
 # -------------------------------
-# FLASK SERVER (FOR RAILWAY)
+# FLASK SERVER (FOR RAILWAY/RENDER)
 # -------------------------------
 server = Flask(__name__)
 
 @server.route("/")
 def home():
-    return "Bot Running Successfully!"
+    return "Bot is running successfully!"
 
 # -------------------------------
-# /start COMMAND
+# COMMAND: /start
 # -------------------------------
 @app.on_message(filters.command("start"))
-async def start(client, message):
+async def start(_, message):
     await message.reply(
         "**Send me any file and I will give you:**\n\n"
         "✔ Permanent Streaming Link\n"
         "✔ Direct Download Link\n"
         "✔ File Name\n"
         "✔ File Size\n\n"
-        "No CDN wait • No Cloudflare • Fully Free 🚀"
+        "No CDN upload • No R2 • 100% Free"
     )
 
 # -------------------------------
-# HANDLE FILE UPLOAD
+# HANDLE ANY MEDIA FILE
 # -------------------------------
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
 async def handle_file(client, message):
 
-    status = await message.reply("Saving securely… 📦")
+    status = await message.reply("Saving file securely… 📦")
 
-    # Extract file details
+    # ---- Extract File Info ----
     media = message.document or message.video or message.audio
-    file_name = media.file_name or "file"
+    file_name = media.file_name or "unnamed"
     file_size = media.file_size
 
-    # Forward file to storage channel
-    forwarded = await message.forward(CHANNEL_ID)
+    # ---- Forward to storage channel ----
+    uploaded = await message.forward(CHANNEL_ID)
 
-    # Fetch full file info
-    file = await client.get_messages(CHANNEL_ID, forwarded.id)
-    file_id = file.document or file.video or file.audio
+    # ---- GET FILE PATH FROM TELEGRAM ----
+    file_obj = await client.get_messages(CHANNEL_ID, uploaded.id)
 
-    # Extract file_path from Telegram
-    file_path = file_id.file_path
+    file_path = file_obj.document.file_path if file_obj.document else (
+                file_obj.video.file_path if file_obj.video else
+                file_obj.audio.file_path)
 
-    # Build direct link (Permanent)
+    # ---- FINAL DIRECT LINK (Permanent) ----
     direct_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
-    # Streaming link = same direct link (works on all players)
-    streaming_link = direct_link
-
     text = f"""
-**📁 File Saved Successfully**
+**🎬 File Processed Successfully**
 
-**📌 File Name:** `{file_name}`
-**📦 File Size:** `{round(file_size / (1024*1024), 2)} MB`
+📌 **File Name:** `{file_name}`
+📦 **File Size:** `{round(file_size / (1024*1024), 2)} MB`
 
-🎬 **Streaming Link:**  
-{streaming_link}
-
-⬇️ **Direct Download Link:**  
+🎥 **Streaming Link:**
 {direct_link}
 
-🔒 Stored safely in your private storage channel.
+⬇️ **Direct Download Link:**
+{direct_link}
+
+🗂 Saved safely in storage 📦
 """
 
     await status.edit(text)
 
 # -------------------------------
-# RUN FLASK + PYROGRAM
+# RUN BOT + FLASK SERVER
 # -------------------------------
 if __name__ == "__main__":
     import threading
