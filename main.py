@@ -1,85 +1,92 @@
 import os
 import logging
 from pyrogram import Client, filters
-from pyrogram.types import Message
-from math import ceil
+from flask import Flask
+import threading
 
-# Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+# -------------------- LOGGING --------------------
+logging.basicConfig(
+    format="%(asctime)s - %(message)s",
+    level=logging.INFO
+)
 
-API_ID = int(os.environ["API_ID"])
-API_HASH = os.environ["API_HASH"]
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+# -------------------- ENV VARIABLES --------------------
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # storage channel
 
+# -------------------- FLASK KEEP ALIVE --------------------
+app_web = Flask(__name__)
+
+@app_web.route("/")
+def index():
+    return "Bot is running!"
+
+def run_flask():
+    app_web.run(host="0.0.0.0", port=8080)
+
+def keep_alive():
+    thread = threading.Thread(target=run_flask)
+    thread.start()
+
+# -------------------- TELEGRAM BOT --------------------
 app = Client(
-    "FileToLinkBot",
+    "bot_session",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
 
-# Convert bytes to human readable format
-def human_readable_size(size):
-    power = 1024
-    n = 0
-    units = ["B", "KB", "MB", "GB", "TB"]
-    while size > power and n < 4:
-        size /= power
-        n += 1
-    return f"{round(size, 2)} {units[n]}"
 
-@app.on_message(filters.private & (filters.video | filters.document))
-async def media_handler(client: Client, message: Message):
-    processing = await message.reply("🔄 Uploading… Please wait.")
-
-    # Forward to your private channel
-    forwarded_msg = await message.forward(CHANNEL_ID)
-
-    # Extract file info
-    media = forwarded_msg.video or forwarded_msg.document
-    file_name = media.file_name
-    file_size = human_readable_size(media.file_size)
-
-    # Generate Telegram CDN link
-    file_path = await client.get_file(media.file_id)
-    cdn_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path.file_path}"
-
-    # Reply with full info
-    await processing.edit(
-        f"🎬 **File Processed Successfully!**\n\n"
-        f"📝 **File Name:** `{file_name}`\n"
-        f"📦 **File Size:** `{file_size}`\n\n"
-        f"▶ **Streaming Link:**\n{cdn_url}\n\n"
-        f"⬇ **Direct Download:**\n{cdn_url}\n\n"
-        "✔ File stored safely in private channel."
-    )
+# Convert bytes → MB
+def size_in_mb(size):
+    return round(size / (1024 * 1024), 2)
 
 
-@app.on_message(filters.command(["start", "help"]))
-async def start(_, message):
-    await message.reply(
-        "👋 **Welcome!**\n\n"
-        "Send any **video/file** and I will give you:\n"
-        "• File Name\n"
-        "• File Size\n"
-        "• Direct Streaming Link (Telegram CDN)\n"
-        "• Direct Download Link\n\n"
-        "100% Free • Unlimited Storage • No Cloudflare needed."
-    )
+# -------------------- HANDLER --------------------
+@app.on_message(filters.private & (filters.video | filters.document | filters.audio))
+async def media_handler(bot, message):
+    try:
+        logging.info("Media received... forwarding to storage channel")
 
-import threading
-from flask import Flask
+        # Forward to your storage channel
+        forwarded = await message.forward(CHANNEL_ID)
 
-flask_app = Flask(__name__)
+        file = forwarded.video or forwarded.document or forwarded.audio
 
-@flask_app.route("/")
-def home():
-    return "Bot is running!"
+        file_id = file.file_id
+        file_name = file.file_name or "Unknown"
+        file_size = size_in_mb(file.file_size)
 
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+        # Direct Telegram CDN link
+        stream_link = await bot.get_file_url(file_id)
 
-threading.Thread(target=run_flask).start()
+        # Direct download link
+        file_info = await bot.get_file(file_id)
+        download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
 
-app.run()
+        # Send formatted message
+        reply_text = f"""
+🎬 **File Name:** {file_name}
+📦 **Size:** {file_size} MB
+
+▶ **Streaming Link:**  
+{stream_link}
+
+⬇ **Download Link:**  
+{download_link}
+        """
+
+        await message.reply_text(reply_text, disable_web_page_preview=True)
+
+    except Exception as e:
+        logging.error(f"Error: {e}")
+        await message.reply_text("❌ Error occurred while processing this file.")
+
+
+# -------------------- START --------------------
+if __name__ == "__main__":
+    keep_alive()
+    logging.info("Bot Started Successfully!")
+    app.run()
