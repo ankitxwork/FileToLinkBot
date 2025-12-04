@@ -68,4 +68,18 @@ async def start(_, message):
         "100% Free • Unlimited Storage • No Cloudflare needed."
     )
 
+import threading
+from flask import Flask
+
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+threading.Thread(target=run_flask).start()
+
 app.run()
