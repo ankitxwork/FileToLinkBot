@@ -1,36 +1,17 @@
-#!/usr/bin/env python3
 import os
-import sys
 import logging
-
 from pyrogram import Client, filters
+from pyrogram.types import Message
+from math import ceil
 
-# ---------------------------
 # Logging
-# ---------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
-log = logging.getLogger("bot")
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
-# ---------------------------
-# ENV VARS
-# ---------------------------
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-CHANNEL_ID = int(os.environ.get("CHANNEL_ID"))
+API_ID = int(os.environ["API_ID"])
+API_HASH = os.environ["API_HASH"]
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-log.info("DEBUG: API_ID loaded: %s", API_ID)
-log.info("DEBUG: API_HASH loaded")
-log.info("DEBUG: BOT_TOKEN loaded: %s...", BOT_TOKEN[:10])
-log.info("DEBUG: CHANNEL_ID loaded: %s", CHANNEL_ID)
-
-# ---------------------------
-# Client
-# ---------------------------
 app = Client(
     "FileToLinkBot",
     api_id=API_ID,
@@ -38,43 +19,53 @@ app = Client(
     bot_token=BOT_TOKEN
 )
 
-# ---------------------------
-# HELPER
-# ---------------------------
-def tme_c_link(chat_id, msg_id):
-    s = str(chat_id)
-    if s.startswith("-100"):
-        return f"https://t.me/c/{s[4:]}/{msg_id}"
-    return f"https://t.me/c/{s}/{msg_id}"
+# Convert bytes to human readable format
+def human_readable_size(size):
+    power = 1024
+    n = 0
+    units = ["B", "KB", "MB", "GB", "TB"]
+    while size > power and n < 4:
+        size /= power
+        n += 1
+    return f"{round(size, 2)} {units[n]}"
 
-# ---------------------------
-# Commands
-# ---------------------------
-@app.on_message(filters.private & filters.command(["start", "help"]))
-async def start(_, message):
-    await message.reply("Send me any video/file and I will create a streaming link!")
-
-# ---------------------------
-# File Handler
-# ---------------------------
 @app.on_message(filters.private & (filters.video | filters.document))
-async def handle_media(client, message):
-    status = await message.reply("🔄 Uploading to secure storage…")
+async def media_handler(client: Client, message: Message):
+    processing = await message.reply("🔄 Uploading… Please wait.")
 
-    try:
-        forwarded = await message.forward(CHANNEL_ID)
-    except Exception as e:
-        return await status.edit(f"❌ Forward failed:\n`{e}`")
+    # Forward to your private channel
+    forwarded_msg = await message.forward(CHANNEL_ID)
 
-    link = tme_c_link(forwarded.chat.id, forwarded.id)
+    # Extract file info
+    media = forwarded_msg.video or forwarded_msg.document
+    file_name = media.file_name
+    file_size = human_readable_size(media.file_size)
 
-    await status.edit(
-        f"🎬 **Streaming Link:**\n`{link}`\n\nSaved securely in storage 📦"
+    # Generate Telegram CDN link
+    file_path = await client.get_file(media.file_id)
+    cdn_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path.file_path}"
+
+    # Reply with full info
+    await processing.edit(
+        f"🎬 **File Processed Successfully!**\n\n"
+        f"📝 **File Name:** `{file_name}`\n"
+        f"📦 **File Size:** `{file_size}`\n\n"
+        f"▶ **Streaming Link:**\n{cdn_url}\n\n"
+        f"⬇ **Direct Download:**\n{cdn_url}\n\n"
+        "✔ File stored safely in private channel."
     )
 
-# ---------------------------
-# Run bot
-# ---------------------------
-if __name__ == "__main__":
-    log.info("DEBUG: Starting bot...")
-    app.run()
+
+@app.on_message(filters.command(["start", "help"]))
+async def start(_, message):
+    await message.reply(
+        "👋 **Welcome!**\n\n"
+        "Send any **video/file** and I will give you:\n"
+        "• File Name\n"
+        "• File Size\n"
+        "• Direct Streaming Link (Telegram CDN)\n"
+        "• Direct Download Link\n\n"
+        "100% Free • Unlimited Storage • No Cloudflare needed."
+    )
+
+app.run()
