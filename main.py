@@ -2,20 +2,18 @@ import os
 import logging
 from pyrogram import Client, filters
 from flask import Flask
-import threading
-import asyncio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])   # your storage channel (must be admin)
 
 logging.info("🚀 Bot Started Successfully!")
 
 # -------------------------------
-# PYROGRAM BOT
+# PYROGRAM CLIENT
 # -------------------------------
 app = Client(
     "CDNFileBot",
@@ -25,86 +23,102 @@ app = Client(
 )
 
 # -------------------------------
-# FLASK SERVER
+# FLASK SERVER FOR RAILWAY
 # -------------------------------
 server = Flask(__name__)
 
 @server.route("/")
 def home():
-    return "Bot is running!"
+    return "Bot Running Successfully!"
 
 # -------------------------------
-# START COMMAND
+# /start
 # -------------------------------
 @app.on_message(filters.command("start"))
-async def start_cmd(client, message):
+async def start(client, message):
     await message.reply(
-        "**Send any media file, I will give you:**\n"
+        "**Send me any file and I will give you:**\n\n"
         "✔ Telegram CDN Streaming Link\n"
         "✔ Direct Download Link\n"
-        "✔ File Name & Size\n"
-        "\n⚡ Fast & Secure"
+        "✔ File Name\n"
+        "✔ File Size\n\n"
+        "Works with ALL FILES (even forwarded)."
     )
 
 # -------------------------------
-# HANDLE FILES
+# FILE HANDLER (ALL MEDIA)
 # -------------------------------
 @app.on_message(filters.private & (filters.document | filters.video | filters.audio))
-async def file_handler(client, message):
+async def handle_file(client, message):
 
     status = await message.reply("Saving securely… 📦")
 
-    media = message.document or message.video or message.audio
-    file_name = media.file_name or "file"
-    file_size = media.file_size
+    # Extract file info
+    if message.document:
+        file_name = message.document.file_name
+        file_size = message.document.file_size
+    elif message.video:
+        file_name = message.video.file_name or "video.mp4"
+        file_size = message.video.file_size
+    elif message.audio:
+        file_name = message.audio.file_name
+        file_size = message.audio.file_size
+    else:
+        file_name = "file"
+        file_size = 0
 
-    # STEP 1: Store in channel instantly (cached media)
-    forwarded = await client.send_cached_media(
-        chat_id=CHANNEL_ID,
-        file_id=media.file_id
+    # -------------------------------
+    # STEP 1: DOWNLOAD FILE LOCALLY
+    # -------------------------------
+    file_path = await message.download()
+
+    # -------------------------------
+    # STEP 2: UPLOAD FRESH TO STORAGE CHANNEL
+    # -------------------------------
+    uploaded = await client.send_document(
+        CHANNEL_ID,
+        file_path,
+        caption=file_name
     )
 
-    # WAIT UNTIL TELEGRAM PROCESSES THE FILE
-    await asyncio.sleep(1.5)
-
-    # STEP 2: Read channel message AGAIN
-    msg = await client.get_messages(CHANNEL_ID, forwarded.id)
-
-    # WAIT AGAIN TO ENSURE CDN URL EXISTS
-    await asyncio.sleep(1.5)
-
-    # STEP 3: Get CDN url
+    # Delete local file to save space
     try:
-        cdn_url = await client.get_file_url(msg)
+        os.remove(file_path)
     except:
-        # If CDN not ready, wait a bit more
-        await asyncio.sleep(1.5)
-        cdn_url = await client.get_file_url(msg)
+        pass
 
+    # -------------------------------
+    # STEP 3: GENERATE TELEGRAM CDN LINK
+    # -------------------------------
+    cdn_link = await client.get_file_url(uploaded)
+
+    # Download link is same CDN link
+    download_link = cdn_link
+
+    # -------------------------------
+    # FINAL RESULT MESSAGE
+    # -------------------------------
     text = f"""
-**🎬 File Saved Successfully**
+**🎬 File Processed Successfully!**
 
-📌 **Name:** `{file_name}`
-📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
+📌 **File Name:** `{file_name}`
+📦 **File Size:** `{round(file_size / (1024*1024), 2)} MB`
 
 🔗 **Streaming Link (Telegram CDN):**
-{cdn_url}
+{cdn_link}
 
 ⬇️ **Direct Download Link:**
-{cdn_url}
+{download_link}
 
-📦 Stored safely in your private channel.
+_File saved securely in private storage channel._
 """
 
     await status.edit(text)
 
-
 # -------------------------------
 # RUN SERVER + BOT
 # -------------------------------
-def start_flask():
-    server.run(host="0.0.0.0", port=8080)
-
 if __name__ == "__main__":
-    threading.Thread(target=start_flask).start()
+    import threading
+    threading.Thread(target=lambda: server.run(host="0.0.0.0", port=8080)).start()
     app.run()
