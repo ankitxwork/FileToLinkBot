@@ -92,6 +92,14 @@ _File saved securely in your private storage channel._
 
     await status.edit(text)
 
+@app.on_message(filters.command("test"))
+async def test(client, message):
+    try:
+        sent = await client.send_message(CHANNEL_ID, "TEST MESSAGE ✔")
+        await message.reply("Bot can SEND messages ✔")
+    except Exception as e:
+        await message.reply(f"❌ ERROR:\n`{e}`")
+
 
 # ------------------ RUN BOTH BOT + FLASK --------------------
 
