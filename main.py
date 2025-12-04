@@ -43,15 +43,18 @@ async def handle_file(client, message):
 
     media = message.document or message.video or message.audio
     file_name = media.file_name or "file"
-    file_size = round((media.file_size or 0) / (1024*1024), 2)
+    file_size = media.file_size or 0
 
-    # ---- Download File ----
+    # DOWNLOAD MEDIA SAFELY
     try:
-    file_path = await message.download()
-except Exception as e:
-    await status.edit(f"❌ Failed to download file.\n\n**Reason:** `{e}`\n\n"
-                      "Send an unprotected media file.")
-    return
+        file_path = await message.download()
+    except Exception as e:
+        await status.edit(
+            f"❌ Failed to download file.\n\n"
+            f"**Reason:** `{e}`\n\n"
+            "⚠ Send a normal (non-forwarded) file or disable content protection."
+        )
+        return
 
     # ---- Upload To Private Storage Channel ----
     uploaded = await client.send_document(
