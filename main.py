@@ -3,6 +3,7 @@ import logging
 from pyrogram import Client, filters
 from flask import Flask
 import threading
+import asyncio
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
@@ -24,7 +25,7 @@ app = Client(
 )
 
 # -------------------------------
-# FLASK KEEP-ALIVE SERVER
+# FLASK SERVER
 # -------------------------------
 server = Flask(__name__)
 
@@ -38,43 +39,52 @@ def home():
 @app.on_message(filters.command("start"))
 async def start_cmd(client, message):
     await message.reply(
-        "**Send any video/document/audio and I will give you:**\n"
+        "**Send any media file, I will give you:**\n"
         "✔ Telegram CDN Streaming Link\n"
         "✔ Direct Download Link\n"
         "✔ File Name & Size\n"
-        "\n⚡ Powered by Pyrogram"
+        "\n⚡ Fast & Secure"
     )
 
 # -------------------------------
-# MEDIA HANDLER
+# HANDLE FILES
 # -------------------------------
-@app.on_message(filters.private & (filters.video | filters.document | filters.audio))
-async def handle_media(client, message):
+@app.on_message(filters.private & (filters.document | filters.video | filters.audio))
+async def file_handler(client, message):
 
     status = await message.reply("Saving securely… 📦")
 
-    # Extract file info
     media = message.document or message.video or message.audio
-
-    file_name = media.file_name if media.file_name else "file"
+    file_name = media.file_name or "file"
     file_size = media.file_size
 
-    # STEP 1: Forward file to storage channel
+    # STEP 1: Store in channel instantly (cached media)
     forwarded = await client.send_cached_media(
         chat_id=CHANNEL_ID,
-        file_id=media.file_id     # 100× faster than message.forward()
+        file_id=media.file_id
     )
 
-    # STEP 2: Fetch message again to get CDN URL
-    channel_msg = await client.get_messages(CHANNEL_ID, forwarded.id)
+    # WAIT UNTIL TELEGRAM PROCESSES THE FILE
+    await asyncio.sleep(1.5)
 
-    # STEP 3: Get CDN URL
-    cdn_url = await client.get_file_url(channel_msg)
+    # STEP 2: Read channel message AGAIN
+    msg = await client.get_messages(CHANNEL_ID, forwarded.id)
+
+    # WAIT AGAIN TO ENSURE CDN URL EXISTS
+    await asyncio.sleep(1.5)
+
+    # STEP 3: Get CDN url
+    try:
+        cdn_url = await client.get_file_url(msg)
+    except:
+        # If CDN not ready, wait a bit more
+        await asyncio.sleep(1.5)
+        cdn_url = await client.get_file_url(msg)
 
     text = f"""
-**🎬 File Processed Successfully**
+**🎬 File Saved Successfully**
 
-📌 **File:** `{file_name}`
+📌 **Name:** `{file_name}`
 📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
 
 🔗 **Streaming Link (Telegram CDN):**
@@ -83,14 +93,14 @@ async def handle_media(client, message):
 ⬇️ **Direct Download Link:**
 {cdn_url}
 
-🗂 Saved securely in storage 📦
+📦 Stored safely in your private channel.
 """
 
     await status.edit(text)
 
 
 # -------------------------------
-# RUN BOTH FLASK + BOT
+# RUN SERVER + BOT
 # -------------------------------
 def start_flask():
     server.run(host="0.0.0.0", port=8080)
