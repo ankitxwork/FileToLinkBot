@@ -92,6 +92,8 @@ _File saved securely in your private storage channel._
 
     await status.edit(text)
 
+
+# ------------------ RUN BOTH BOT + FLASK --------------------
 @app.on_message(filters.command("test"))
 async def test(client, message):
     try:
@@ -100,8 +102,6 @@ async def test(client, message):
     except Exception as e:
         await message.reply(f"❌ ERROR:\n`{e}`")
 
-
-# ------------------ RUN BOTH BOT + FLASK --------------------
 
 if __name__ == "__main__":
     import threading
