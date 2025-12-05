@@ -4,7 +4,6 @@ from pyrogram import Client, filters
 from flask import Flask
 import subprocess
 import uuid
-import shutil
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
@@ -31,10 +30,10 @@ def home():
 @app.on_message(filters.command("start"))
 async def start_msg(_, msg):
     await msg.reply(
-        "**Send any *VIDEO* and I will convert it into Streaming HLS (.m3u8)**\n\n"
-        "✔ CDN Streaming Link\n"
-        "✔ Direct Download\n"
-        "✔ Saved to private storage"
+        "**Send any VIDEO and I'll convert it into:**\n"
+        "🎥 HLS streaming link (.m3u8)\n"
+        "☁ CDN link\n"
+        "📥 Direct download"
     )
 
 
@@ -46,25 +45,24 @@ async def convert_hls(client, message):
     file_name = media.file_name or "video.mp4"
     file_size = media.file_size
 
-    # -------- DOWNLOAD --------
+    # DOWNLOAD
     await status.edit("Downloading… ⬇")
     download_path = await client.download_media(message)
 
-    # -------- HLS OUTPUT FOLDER --------
+    # HLS Folder
     output_id = str(uuid.uuid4())
     out_folder = f"hls_{output_id}"
     os.makedirs(out_folder, exist_ok=True)
 
     m3u8_file = f"{out_folder}/index.m3u8"
 
-    # -------- HLS CONVERSION --------
+    # CONVERT
     await status.edit("Converting to HLS… 🎞")
 
     cmd = [
         "ffmpeg",
         "-i", download_path,
-        "-c:v", "copy",
-        "-c:a", "copy",
+        "-codec", "copy",
         "-start_number", "0",
         "-hls_time", "4",
         "-hls_list_size", "0",
@@ -72,14 +70,10 @@ async def convert_hls(client, message):
         m3u8_file
     ]
 
-    process = subprocess.run(cmd, stderr=subprocess.PIPE)
-    
-    if process.returncode != 0:
-        await status.edit("❌ FFmpeg failed. File may be corrupted.")
-        return
+    subprocess.run(cmd)
 
-    # -------- UPLOAD TO CHANNEL --------
-    await status.edit("Uploading HLS files… ☁")
+    # UPLOAD
+    await status.edit("Uploading to private channel… ☁")
 
     uploaded_m3u8 = await client.send_document(
         CHANNEL_ID,
@@ -87,35 +81,34 @@ async def convert_hls(client, message):
         caption=f"HLS Playlist for {file_name}"
     )
 
-    # Upload chunk files
-    ts_chunks = sorted([f for f in os.listdir(out_folder) if f.endswith(".ts")])
+    # Upload TS chunks
+    for ts_file in sorted(os.listdir(out_folder)):
+        if ts_file.endswith(".ts"):
+            ts_path = f"{out_folder}/{ts_file}"
+            await client.send_document(CHANNEL_ID, ts_path)
 
-    for ts in ts_chunks:
-        await client.send_document(CHANNEL_ID, f"{out_folder}/{ts}")
-
-    # -------- CLEANUP --------
+    # CLEANUP
     try:
         os.remove(download_path)
     except:
         pass
 
-    shutil.rmtree(out_folder, ignore_errors=True)
-
-    # -------- GENERATE PUBLIC LINK --------
+    # GET PUBLIC LINK
     file_details = await client.get_messages(CHANNEL_ID, uploaded_m3u8.id)
-    file_info = await client.get_file(file_details.document.file_id)
-    cdn_path = file_info.file_path
+    file_path = file_details.document.file_id
 
-    download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cdn_path}"
+    download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
 
     result = f"""
-**HLS Conversion Complete! 🚀**
+✅ **HLS Conversion Complete!**
 
 🎥 **File:** `{file_name}`
 📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
 
 📺 **HLS Playlist (.m3u8):**
 `{download_link}`
+
+Use any player that supports HLS (VLC, MX Player, Video.js, JWPlayer, ExoPlayer)
 """
 
     await status.edit(result)
