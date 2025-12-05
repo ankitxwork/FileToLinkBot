@@ -13,29 +13,29 @@ API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
-# IMPORTANT: No session file (Railway ephemeral), so use bot mode only
 app = Client(
-    name="bot-session",
-    bot_token=BOT_TOKEN,
+    "HLSBot",
     api_id=API_ID,
-    api_hash=API_HASH
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+    in_memory=True
 )
 
 server = Flask(__name__)
 
 @server.route("/")
 def home():
-    return "HLS Bot Running Successfully!"
+    return "Bot Running Successfully!"
+
 
 @app.on_message(filters.command("start"))
 async def start_msg(_, msg):
     await msg.reply(
-        "**🎥 Send any *VIDEO* and I will convert it into:**\n"
-        "• HLS Streaming (.m3u8)\n"
-        "• Fast CDN Stream Link\n"
-        "• Direct Download Link\n"
-        "• Saved in Private Channel\n\n"
-        "⚡ Supports MP4, MKV, WebM"
+        "**Send a VIDEO and I will convert it to:**\n\n"
+        "🎬 HLS Streaming (.m3u8)\n"
+        "⚡ Fast CDN stream link\n"
+        "⬇ Direct download link\n"
+        "💾 Stored privately in your storage channel"
     )
 
 
@@ -47,87 +47,75 @@ async def convert_hls(client, message):
     file_name = media.file_name or "video.mp4"
     file_size = media.file_size
 
-    # STEP 1 — DOWNLOAD
-    await status.edit("⬇ Downloading file…")
-    try:
-        download_path = await client.download_media(message)
-    except Exception as e:
-        await status.edit(f"❌ Download failed:\n`{e}`")
-        return
+    # -------- DOWNLOAD --------
+    await status.edit("Downloading File… ⬇")
+    download_path = await client.download_media(message)
 
-    # Unique folder for HLS
-    output_id = uuid.uuid4().hex
+    # HLS OUTPUT FOLDER
+    output_id = str(uuid.uuid4())
     out_folder = f"hls_{output_id}"
     os.makedirs(out_folder, exist_ok=True)
 
     m3u8_file = f"{out_folder}/index.m3u8"
 
-    # STEP 2 — Convert to HLS
-    await status.edit("🎞 Converting video to HLS…")
+    # -------- RUN FFMPEG --------
+    await status.edit("Converting to HLS… 🎞")
 
     cmd = [
         "ffmpeg",
         "-i", download_path,
-        "-preset", "veryfast",
+        "-c:v", "copy",
+        "-c:a", "copy",
         "-hls_time", "4",
         "-hls_list_size", "0",
-        "-hls_segment_filename", f"{out_folder}/seg_%03d.ts",
-        "-f", "hls",
+        "-hls_segment_filename", f"{out_folder}/seg_%04d.ts",
         m3u8_file
     ]
 
-    process = subprocess.run(cmd, stderr=subprocess.PIPE)
-    if process.returncode != 0:
-        await status.edit("❌ FFmpeg failed to convert file.")
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    if proc.returncode != 0:
+        await status.edit("❌ FFmpeg failed! Cannot convert file.")
         return
 
-    # STEP 3 — Upload .m3u8 file
-    await status.edit("☁ Uploading playlist…")
+    # -------- UPLOAD M3U8 --------
+    await status.edit("Uploading playlist… ☁")
 
+    uploaded_m3u8 = await client.send_document(
+        CHANNEL_ID,
+        m3u8_file,
+        caption=f"HLS Playlist for {file_name}"
+    )
+
+    # -------- UPLOAD TS CHUNKS --------
+    await status.edit("Uploading video segments… ⏳")
+
+    for chunk in sorted(os.listdir(out_folder)):
+        if chunk.endswith(".ts"):
+            await client.send_document(
+                CHANNEL_ID,
+                f"{out_folder}/{chunk}"
+            )
+
+    # Cleanup local storage
     try:
-        uploaded_m3u8 = await client.send_document(
-            CHANNEL_ID,
-            m3u8_file,
-            caption=f"HLS Playlist for {file_name}"
-        )
-    except Exception as e:
-        await status.edit(f"❌ Upload failed:\n`{e}`")
-        return
-
-    # STEP 4 — Upload TS chunks
-    await status.edit("☁ Uploading video segments…")
-
-    ts_uploaded = []
-    for ts in sorted(os.listdir(out_folder)):
-        if ts.endswith(".ts"):
-            path = f"{out_folder}/{ts}"
-            msg_ts = await client.send_document(CHANNEL_ID, path)
-            ts_uploaded.append(msg_ts)
-
-    # Cleanup temp files
-    try:
-        os.remove(download_path)
         shutil.rmtree(out_folder)
+        os.remove(download_path)
     except:
         pass
 
-    # STEP 5 — Generate File Link
-    file_info = await client.get_messages(CHANNEL_ID, uploaded_m3u8.id)
-    file_meta = await client.get_file(file_info.document.file_id)
-    cdn_path = file_meta.file_path
+    # -------- GENERATE CDN LINK --------
+    file_details = await client.get_messages(CHANNEL_ID, uploaded_m3u8.id)
+    file_info = await client.get_file(file_details.document.file_id)
 
-    stream_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cdn_path}"
+    cdn_path = file_info.file_path
+    cdn_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cdn_path}"
 
-    await status.edit(
-        f"✅ **HLS Conversion Complete!**\n\n"
-        f"📌 **File:** `{file_name}`\n"
-        f"📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`\n\n"
-        f"🎥 **HLS Playlist (.m3u8):**\n`{stream_link}`\n\n"
-        f"⚠️ Use a player that supports `.m3u8` (VLC, MX Player, Video.js)"
-    )
+    # RESPONSE
+    final_msg = f"""
+**✅ HLS Conversion Complete!**
 
+🎬 **File:** `{file_name}`
+📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
 
-if __name__ == "__main__":
-    import threading
-    threading.Thread(target=lambda: server.run(host="0.0.0.0", port=8080)).start()
-    app.run()
+📺 **HLS Stream Link (.m3u8):**
