@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = os.environ["CHANNEL_ID"]   # <-- KEEP AS STRING
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
 
 app = Client(
     "HLSBot",
@@ -44,12 +44,12 @@ async def convert_hls(client, message):
 
     media = message.video or message.document
     file_name = media.file_name or "video.mp4"
-    file_size = media.file_size
 
     os.makedirs("downloads", exist_ok=True)
 
-    # -------- DOWNLOAD --------
+    # ---------------- DOWNLOAD ----------------
     await status.edit("Downloading… ⬇")
+
     try:
         download_path = await client.download_media(
             message,
@@ -58,15 +58,14 @@ async def convert_hls(client, message):
     except Exception as e:
         return await status.edit(f"❌ Download error:\n`{e}`")
 
-    # -------- HLS FOLDER --------
+    # ---------------- HLS CONVERSION ----------------
+    await status.edit("Converting to HLS… 🎞")
+
     output_id = str(uuid.uuid4())
     out_folder = f"hls_{output_id}"
     os.makedirs(out_folder, exist_ok=True)
 
     m3u8_file = f"{out_folder}/index.m3u8"
-
-    # -------- HLS CONVERSION --------
-    await status.edit("Converting to HLS… 🎞")
 
     cmd = [
         "ffmpeg",
@@ -81,57 +80,35 @@ async def convert_hls(client, message):
 
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    # -------- UPLOAD .m3u8 --------
-    await status.edit("Uploading… ☁")
-
-    # FIX PEER-ID BY RESOLVING CHANNEL
-    try:
-        peer = await client.resolve_peer(CHANNEL_ID)
-    except Exception as e:
-        return await status.edit(f"❌ Channel Error:\n`{e}`")
+    # ---------------- UPLOAD ----------------
+    await status.edit("Uploading files to channel… ☁")
 
     try:
         uploaded_m3u8 = await client.send_document(
-            peer,
+            CHANNEL_ID,
             m3u8_file,
             caption=f"HLS Playlist for {file_name}"
         )
     except Exception as e:
-        return await status.edit(f"❌ Upload error:\n`{e}`")
+        return await status.edit(f"❌ ERROR: Cannot upload to channel.\n`{e}`\n\n"
+                                 "➡ Make sure bot is ADMIN in your channel.")
 
-    # -------- UPLOAD TS FILES --------
-    for ts_file in sorted(os.listdir(out_folder)):
-        if ts_file.endswith(".ts"):
-            await client.send_document(peer, f"{out_folder}/{ts_file}")
+    for ts in sorted(os.listdir(out_folder)):
+        if ts.endswith(".ts"):
+            await client.send_document(CHANNEL_ID, f"{out_folder}/{ts}")
 
-    # -------- GENERATE PUBLIC LINK (FIXED) --------
-try:
-    # Fetch message using send_document returned object
-    file_details = await client.get_messages(
-        chat_id=uploaded_m3u8.chat.id,   # Correct for channels
-        message_ids=uploaded_m3u8.id     # Correct ID type
+    # ---------------- GET TELEGRAM CDN LINK ----------------
+    try:
+        file_info = await client.get_file(uploaded_m3u8.document.file_id)
+    except Exception as e:
+        return await status.edit(f"❌ Error generating link:\n`{e}`")
+
+    cdn_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+
+    await status.edit(
+        f"**HLS Conversion Complete! 🚀**\n\n"
+        f"📺 **Playlist (.m3u8):**\n`{cdn_link}`"
     )
-
-    file_id = file_details.document.file_id
-
-    file_info = await client.get_file(file_id)
-
-    download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
-
-    result = f"""
-**HLS Conversion Complete! 🚀**
-
-🎥 **Original File:** `{file_name}`
-📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
-
-📺 **HLS Playlist (.m3u8):**
-`{download_link}`
-"""
-
-    await status.edit(result)
-
-except Exception as e:
-    await status.edit(f"❌ Error generating link:\n`{e}`")
 
 
 if __name__ == "__main__":
