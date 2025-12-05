@@ -4,14 +4,13 @@ from pyrogram import Client, filters
 from flask import Flask
 import subprocess
 import uuid
-import shutil
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+CHANNEL_ID = os.environ["CHANNEL_ID"]   # <-- KEEP AS STRING
 
 app = Client(
     "HLSBot",
@@ -57,16 +56,16 @@ async def convert_hls(client, message):
             file_name=f"downloads/{file_name}"
         )
     except Exception as e:
-        await status.edit(f"❌ Error downloading file:\n`{e}`")
-        return
+        return await status.edit(f"❌ Download error:\n`{e}`")
 
-    # -------- HLS OUTPUT --------
+    # -------- HLS FOLDER --------
     output_id = str(uuid.uuid4())
     out_folder = f"hls_{output_id}"
     os.makedirs(out_folder, exist_ok=True)
 
     m3u8_file = f"{out_folder}/index.m3u8"
 
+    # -------- HLS CONVERSION --------
     await status.edit("Converting to HLS… 🎞")
 
     cmd = [
@@ -82,58 +81,42 @@ async def convert_hls(client, message):
 
     subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    # -------- UPLOAD TO CHANNEL --------
-    await status.edit("Uploading HLS files… ☁")
+    # -------- UPLOAD .m3u8 --------
+    await status.edit("Uploading… ☁")
+
+    # FIX PEER-ID BY RESOLVING CHANNEL
+    try:
+        peer = await client.resolve_peer(CHANNEL_ID)
+    except Exception as e:
+        return await status.edit(f"❌ Channel Error:\n`{e}`")
 
     try:
         uploaded_m3u8 = await client.send_document(
-            chat_id=CHANNEL_ID,
-            document=m3u8_file,
+            peer,
+            m3u8_file,
             caption=f"HLS Playlist for {file_name}"
         )
     except Exception as e:
-        await status.edit(f"❌ Error uploading playlist:\n`{e}`")
-        return
+        return await status.edit(f"❌ Upload error:\n`{e}`")
 
-    # Upload TS chunks
+    # -------- UPLOAD TS FILES --------
     for ts_file in sorted(os.listdir(out_folder)):
         if ts_file.endswith(".ts"):
-            await client.send_document(
-                chat_id=CHANNEL_ID,
-                document=f"{out_folder}/{ts_file}"
-            )
+            await client.send_document(peer, f"{out_folder}/{ts_file}")
 
-    # -------- GET PUBLIC LINK (FIXED) --------
-    try:
-        file_details = await client.get_messages(
-            chat_id=CHANNEL_ID,
-            message_ids=uploaded_m3u8.id   # FIXED HERE
-        )
+    # -------- GENERATE PUBLIC LINK --------
+    file_info = await client.get_file(uploaded_m3u8.document.file_id)
 
-        file_info = await client.get_file(file_details.document.file_id)
-        download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+    download_link = (
+        f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+    )
 
-    except Exception as e:
-        await status.edit(f"❌ Error generating link:\n`{e}`")
-        return
-
-    result = f"""
-**HLS Conversion Complete! 🚀**
-
-🎥 **Original File:** `{file_name}`
-📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
-
-📺 **HLS Playlist (.m3u8):**
-`{download_link}`
-"""
-    await status.edit(result)
-
-    # Cleanup
-    shutil.rmtree(out_folder)
-    try:
-        os.remove(download_path)
-    except:
-        pass
+    await status.edit(
+        f"**HLS Conversion Complete! 🚀**\n\n"
+        f"🎥 **File:** `{file_name}`\n"
+        f"📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`\n\n"
+        f"📺 **Playlist:**\n`{download_link}`"
+    )
 
 
 if __name__ == "__main__":
