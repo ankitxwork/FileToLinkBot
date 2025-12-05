@@ -1,17 +1,23 @@
+# main.py (replace your current file with this)
 import os
 import logging
-from pyrogram import Client, filters
-from flask import Flask
 import subprocess
 import uuid
+import shutil
+import requests
+from pyrogram import Client, filters
+from flask import Flask
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 
+# --- ENV ---
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+# You may use -1001234567890 (int) or a @username (string). See notes below.
+CHANNEL_ID = os.environ.get("CHANNEL_ID")  # keep as string; we'll try to use int if possible
 
+# --- CLIENT ---
 app = Client(
     "HLSBot",
     api_id=API_ID,
@@ -26,6 +32,34 @@ server = Flask(__name__)
 def home():
     return "Bot Running Successfully!"
 
+# Helper to get a numeric chat id when user provided integer string
+def parse_channel_id(raw):
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except:
+        return raw  # likely a @username string
+
+def bot_api_get_file_path(file_id: str):
+    """Use Bot HTTP API to call getFile and return file_path (or raise)."""
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile"
+    resp = requests.get(url, params={"file_id": file_id}, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("ok"):
+        raise RuntimeError(f"Bot API getFile failed: {data}")
+    return data["result"]["file_path"]
+
+def cleanup_paths(*paths):
+    for p in paths:
+        try:
+            if os.path.isdir(p):
+                shutil.rmtree(p)
+            elif os.path.exists(p):
+                os.remove(p)
+        except Exception:
+            pass
 
 @app.on_message(filters.command("start"))
 async def start_msg(_, msg):
@@ -37,38 +71,37 @@ async def start_msg(_, msg):
         "💾 Saved securely in private channel"
     )
 
-
 @app.on_message(filters.private & (filters.video | filters.document))
 async def convert_hls(client, message):
     status = await message.reply("Processing… 🔄")
 
     media = message.video or message.document
-    file_name = media.file_name or "video.mp4"
+    file_name = getattr(media, "file_name", None) or "video.mp4"
+    file_size = getattr(media, "file_size", 0)
 
+    # ensure folders
     os.makedirs("downloads", exist_ok=True)
-
-    # ---------------- DOWNLOAD ----------------
-    await status.edit("Downloading… ⬇")
-
-    try:
-        download_path = await client.download_media(
-            message,
-            file_name=f"downloads/{file_name}"
-        )
-    except Exception as e:
-        return await status.edit(f"❌ Download error:\n`{e}`")
-
-    # ---------------- HLS CONVERSION ----------------
-    await status.edit("Converting to HLS… 🎞")
-
     output_id = str(uuid.uuid4())
     out_folder = f"hls_{output_id}"
     os.makedirs(out_folder, exist_ok=True)
+    m3u8_file = os.path.join(out_folder, "index.m3u8")
 
-    m3u8_file = f"{out_folder}/index.m3u8"
+    # Download
+    await status.edit("Downloading… ⬇")
+    try:
+        download_path = await client.download_media(message, file_name=os.path.join("downloads", file_name))
+        if not download_path or not os.path.exists(download_path):
+            raise RuntimeError("download returned no file")
+    except Exception as e:
+        await status.edit(f"❌ Error downloading file:\n`{e}`")
+        cleanup_paths(out_folder)
+        return
 
+    # Convert to HLS
+    await status.edit("Converting to HLS… 🎞")
     cmd = [
         "ffmpeg",
+        "-y",
         "-i", download_path,
         "-codec", "copy",
         "-start_number", "0",
@@ -77,41 +110,81 @@ async def convert_hls(client, message):
         "-f", "hls",
         m3u8_file
     ]
-
-    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    # ---------------- UPLOAD ----------------
-    await status.edit("Uploading files to channel… ☁")
-
     try:
-        uploaded_m3u8 = await client.send_document(
-            CHANNEL_ID,
-            m3u8_file,
-            caption=f"HLS Playlist for {file_name}"
-        )
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        if p.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed (rc={p.returncode}): {p.stderr[:1000]}")
     except Exception as e:
-        return await status.edit(f"❌ ERROR: Cannot upload to channel.\n`{e}`\n\n"
-                                 "➡ Make sure bot is ADMIN in your channel.")
+        await status.edit(f"❌ FFmpeg conversion failed:\n`{e}`")
+        cleanup_paths(download_path, out_folder)
+        return
 
-    for ts in sorted(os.listdir(out_folder)):
-        if ts.endswith(".ts"):
-            await client.send_document(CHANNEL_ID, f"{out_folder}/{ts}")
+    # Upload to channel
+    await status.edit("Uploading HLS files to channel… ☁")
 
-    # ---------------- GET TELEGRAM CDN LINK ----------------
+    chat = parse_channel_id(CHANNEL_ID)
+    # first upload index.m3u8
     try:
-        file_info = await client.get_file(uploaded_m3u8.document.file_id)
+        uploaded_m3u8 = await client.send_document(chat, m3u8_file, caption=f"HLS Playlist for {file_name}")
     except Exception as e:
-        return await status.edit(f"❌ Error generating link:\n`{e}`")
+        # Give actionable message if peer invalid
+        err_text = str(e)
+        if "Peer id invalid" in err_text or "ID not found" in err_text or "ChannelPrivate" in err_text:
+            await status.edit(
+                "❌ Error: Cannot send to the channel with the given CHANNEL_ID.\n\n"
+                "Make sure:\n"
+                "• the bot is **added as an admin** in the channel (Post messages right enabled),\n"
+                "• if the channel is **private**, you added the bot as an admin directly (not via forwarding),\n"
+                "• CHANNEL_ID is set correctly (use `-1001234567890` or `@channelusername`).\n\n"
+                f"Detailed error: `{err_text}`"
+            )
+        else:
+            await status.edit(f"❌ Error uploading index.m3u8:\n`{err_text}`")
+        cleanup_paths(download_path, out_folder)
+        return
 
-    cdn_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+    # then upload TS segments
+    try:
+        for ts_file in sorted(os.listdir(out_folder)):
+            if ts_file.endswith(".ts"):
+                ts_path = os.path.join(out_folder, ts_file)
+                await client.send_document(chat, ts_path)
+    except Exception as e:
+        await status.edit(f"❌ Error uploading segments:\n`{e}`")
+        # continue to try to give playlist link anyway
 
-    await status.edit(
-        f"**HLS Conversion Complete! 🚀**\n\n"
-        f"📺 **Playlist (.m3u8):**\n`{cdn_link}`"
-    )
+    # Build download link using Bot API getFile (avoids awaiting async generator)
+    try:
+        file_id = uploaded_m3u8.document.file_id
+        file_path = bot_api_get_file_path(file_id)
+        download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+    except Exception as e:
+        download_link = None
+        dl_err = str(e)
+
+    # Final message
+    res_lines = [
+        "**HLS Conversion Complete! 🚀**",
+        "",
+        f"🎥 **Original File:** `{file_name}`",
+        f"📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`",
+        ""
+    ]
+    if download_link:
+        res_lines += ["📺 **HLS Playlist (.m3u8):**", f"`{download_link}`"]
+    else:
+        res_lines += ["⚠ Could not generate direct download via Bot API.", f"`{dl_err}`"]
+
+    await status.edit("\n".join(res_lines))
+
+    # cleanup
+    cleanup_paths(download_path)
+    # keep uploaded files in channel; remove local hls folder
+    cleanup_paths(out_folder)
 
 
 if __name__ == "__main__":
     import threading
-    threading.Thread(target=lambda: server.run(host="0.0.0.0", port=8080)).start()
+    # start a small health server for Railway
+    threading.Thread(target=lambda: server.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))).start()
     app.run()
