@@ -31,17 +31,15 @@ def home():
 @app.on_message(filters.command("start"))
 async def start_msg(_, msg):
     await msg.reply(
-        "**Send any *VIDEO* and I will convert it into:**\n\n"
-        "🎥 HLS Streaming (.m3u8)\n"
-        "⚡ Fast CDN Stream\n"
-        "⬇ Direct Download Link\n"
-        "💾 Saved securely in private channel"
+        "**Send any *VIDEO* and I will convert it into Streaming HLS (.m3u8)**\n\n"
+        "✔ CDN Streaming Link\n"
+        "✔ Direct Download\n"
+        "✔ Saved to private storage"
     )
 
 
 @app.on_message(filters.private & (filters.video | filters.document))
 async def convert_hls(client, message):
-
     status = await message.reply("Processing… 🔄")
 
     media = message.video or message.document
@@ -52,11 +50,12 @@ async def convert_hls(client, message):
     await status.edit("Downloading… ⬇")
     download_path = await client.download_media(message)
 
+    # -------- HLS OUTPUT FOLDER --------
     output_id = str(uuid.uuid4())
     out_folder = f"hls_{output_id}"
     os.makedirs(out_folder, exist_ok=True)
 
-    playlist_path = f"{out_folder}/index.m3u8"
+    m3u8_file = f"{out_folder}/index.m3u8"
 
     # -------- HLS CONVERSION --------
     await status.edit("Converting to HLS… 🎞")
@@ -64,52 +63,62 @@ async def convert_hls(client, message):
     cmd = [
         "ffmpeg",
         "-i", download_path,
-        "-codec", "copy",
+        "-c:v", "copy",
+        "-c:a", "copy",
         "-start_number", "0",
         "-hls_time", "4",
         "-hls_list_size", "0",
         "-f", "hls",
-        playlist_path
+        m3u8_file
     ]
 
-    subprocess.run(cmd)
-
-    # -------- UPLOAD --------
-    await status.edit("Uploading to channel… ☁")
-
-    try:
-        uploaded = await client.send_document(
-            CHANNEL_ID,
-            playlist_path,
-            caption=f"HLS Playlist for {file_name}"
-        )
-    except Exception as e:
-        await status.edit(f"❌ Upload failed:\n`{str(e)}`\n\n"
-                          "➡ Your bot is NOT admin in the channel.\n"
-                          "➡ Fix this by adding bot to channel manually.")
+    process = subprocess.run(cmd, stderr=subprocess.PIPE)
+    
+    if process.returncode != 0:
+        await status.edit("❌ FFmpeg failed. File may be corrupted.")
         return
 
-    # Upload .ts files
-    ts_files = sorted([f for f in os.listdir(out_folder) if f.endswith(".ts")])
-    for ts in ts_files:
-        await client.send_document(CHANNEL_ID, f"{out_folder}/{ts}")
+    # -------- UPLOAD TO CHANNEL --------
+    await status.edit("Uploading HLS files… ☁")
 
-    # -------- PUBLIC LINK --------
-    file_info = await client.get_messages(CHANNEL_ID, uploaded.id)
-    file = await client.get_file(file_info.document.file_id)
-    cdn = file.file_path
-
-    link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cdn}"
-
-    await status.edit(
-        f"**HLS Ready! 🚀**\n\n"
-        f"🎥 File: `{file_name}`\n"
-        f"📦 Size: `{round(file_size/1024/1024,2)} MB`\n\n"
-        f"📺 **HLS Playlist:**\n`{link}`"
+    uploaded_m3u8 = await client.send_document(
+        CHANNEL_ID,
+        m3u8_file,
+        caption=f"HLS Playlist for {file_name}"
     )
 
-    shutil.rmtree(out_folder)
-    os.remove(download_path)
+    # Upload chunk files
+    ts_chunks = sorted([f for f in os.listdir(out_folder) if f.endswith(".ts")])
+
+    for ts in ts_chunks:
+        await client.send_document(CHANNEL_ID, f"{out_folder}/{ts}")
+
+    # -------- CLEANUP --------
+    try:
+        os.remove(download_path)
+    except:
+        pass
+
+    shutil.rmtree(out_folder, ignore_errors=True)
+
+    # -------- GENERATE PUBLIC LINK --------
+    file_details = await client.get_messages(CHANNEL_ID, uploaded_m3u8.id)
+    file_info = await client.get_file(file_details.document.file_id)
+    cdn_path = file_info.file_path
+
+    download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{cdn_path}"
+
+    result = f"""
+**HLS Conversion Complete! 🚀**
+
+🎥 **File:** `{file_name}`
+📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
+
+📺 **HLS Playlist (.m3u8):**
+`{download_link}`
+"""
+
+    await status.edit(result)
 
 
 if __name__ == "__main__":
