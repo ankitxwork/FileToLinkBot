@@ -17,5 +17,9 @@ COPY . /app
 # Install Python packages
 RUN pip install --no-cache-dir -r requirements.txt
 
+# -------- PERSIST DATA --------
+# This folder will store Pyrogram session + downloads
+VOLUME /app/data
+
 # -------- RUN THE BOT --------
 CMD ["python", "main.py"]
