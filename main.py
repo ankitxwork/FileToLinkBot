@@ -104,19 +104,34 @@ async def convert_hls(client, message):
         if ts_file.endswith(".ts"):
             await client.send_document(peer, f"{out_folder}/{ts_file}")
 
-    # -------- GENERATE PUBLIC LINK --------
-    file_info = await client.get_file(uploaded_m3u8.document.file_id)
-
-    download_link = (
-        f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+    # -------- GENERATE PUBLIC LINK (FIXED) --------
+try:
+    # Fetch message using send_document returned object
+    file_details = await client.get_messages(
+        chat_id=uploaded_m3u8.chat.id,   # Correct for channels
+        message_ids=uploaded_m3u8.id     # Correct ID type
     )
 
-    await status.edit(
-        f"**HLS Conversion Complete! 🚀**\n\n"
-        f"🎥 **File:** `{file_name}`\n"
-        f"📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`\n\n"
-        f"📺 **Playlist:**\n`{download_link}`"
-    )
+    file_id = file_details.document.file_id
+
+    file_info = await client.get_file(file_id)
+
+    download_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+
+    result = f"""
+**HLS Conversion Complete! 🚀**
+
+🎥 **Original File:** `{file_name}`
+📦 **Size:** `{round(file_size / (1024*1024), 2)} MB`
+
+📺 **HLS Playlist (.m3u8):**
+`{download_link}`
+"""
+
+    await status.edit(result)
+
+except Exception as e:
+    await status.edit(f"❌ Error generating link:\n`{e}`")
 
 
 if __name__ == "__main__":
