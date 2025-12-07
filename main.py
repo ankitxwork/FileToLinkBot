@@ -53,3 +53,43 @@ async def handle_video(client: Client, m: Message):
     await msg.edit("🎞 Converting to streaming format...")
 
     subprocess.run([
+        "ffmpeg",
+        "-i", download_path,
+        "-c", "copy",
+        "-start_number", "0",
+        "-hls_time", "4",
+        "-hls_list_size", "0",
+        "-f", "hls",
+        m3u8_path
+    ], check=True)
+
+    await msg.edit("☁ Uploading files...")
+
+    m3u8_msg = await client.send_document(
+        CHANNEL_ID,
+        m3u8_path,
+        caption=f"🎬 {file_name}"
+    )
+
+    for f in sorted(os.listdir(hls_dir)):
+        if f.endswith(".ts"):
+            await client.send_document(
+                CHANNEL_ID,
+                f"{hls_dir}/{f}"
+            )
+
+    file = await client.get_file(m3u8_msg.document.file_id)
+    stream_link = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+
+    result = (
+        "✅ **Conversion Completed**\n\n"
+        f"📁 **Name:** `{file_name}`\n"
+        f"📦 **Size:** `{file_size} MB`\n\n"
+        f"▶ **Streaming (.m3u8):**\n{stream_link}\n\n"
+        f"⬇ **Download:**\n{stream_link}"
+    )
+
+    await msg.edit(result)
+
+
+app.run()
