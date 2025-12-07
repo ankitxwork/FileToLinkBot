@@ -1,46 +1,47 @@
 import os
 import uuid
-import logging
 import subprocess
-from pyrogram import Client, filters
+import logging
 from flask import Flask
-from threading import Thread
+from pyrogram import Client, filters
 
-# ───── Logging ─────
+# ---------- LOGGING ----------
 logging.basicConfig(level=logging.INFO)
 
-# ───── ENV ─────
+# ---------- ENV ----------
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL_ID = int(os.environ["CHANNEL_ID"])  # MUST BE PUBLIC CHANNEL USERNAME ID
+CHANNEL_ID = int(os.environ["CHANNEL_ID"])
+PORT = int(os.environ.get("PORT", 8080))
 
-# ───── Pyrogram Bot ─────
-app = Client(
+# ---------- PYROGRAM ----------
+bot = Client(
     "filetolink",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN,
+    in_memory=True
 )
 
-# ───── Flask (Railway requirement) ─────
-server = Flask(__name__)
+# ---------- FLASK ----------
+app = Flask(__name__)
 
-@server.route("/")
+@app.route("/")
 def home():
-    return "Bot is alive ✅"
+    return "✅ Bot is Running"
 
-def run_flask():
-    server.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+# ---------- COMMAND ----------
+@bot.on_message(filters.command("start") & filters.private)
+async def start(_, msg):
+    await msg.reply(
+        "✅ **Send a video file**\n\n"
+        "I will convert it to **HLS (.m3u8)** and give you a streaming link."
+    )
 
-# ───── Commands ─────
-@app.on_message(filters.command("start"))
-async def start(_, m):
-    await m.reply("📤 Send a video file to convert into HLS (.m3u8)")
-
-# ───── HLS Logic ─────
-@app.on_message(filters.private & (filters.video | filters.document))
-async def convert(client, message):
+# ---------- MAIN HANDLER ----------
+@bot.on_message(filters.private & (filters.video | filters.document))
+async def handler(client, message):
     status = await message.reply("⬇ Downloading...")
 
     media = message.video or message.document
@@ -49,54 +50,60 @@ async def convert(client, message):
     os.makedirs("downloads", exist_ok=True)
     os.makedirs("hls", exist_ok=True)
 
-    try:
-        input_path = await client.download_media(
-            message,
-            file_name=f"downloads/{filename}"
-        )
-    except Exception as e:
-        await status.edit(f"❌ Download failed\n`{e}`")
-        return
+    # ---- DOWNLOAD ----
+    input_path = await client.download_media(
+        message,
+        file_name=f"downloads/{filename}"
+    )
 
     await status.edit("🎞 Converting to HLS...")
 
-    uid = uuid.uuid4().hex
+    uid = str(uuid.uuid4())
     out_dir = f"hls/{uid}"
     os.makedirs(out_dir, exist_ok=True)
 
-    m3u8 = f"{out_dir}/index.m3u8"
+    playlist = f"{out_dir}/index.m3u8"
 
+    # ---- FFMPEG ----
     subprocess.run([
-        "ffmpeg", "-i", input_path,
+        "ffmpeg", "-y",
+        "-i", input_path,
         "-codec", "copy",
         "-start_number", "0",
         "-hls_time", "4",
         "-hls_list_size", "0",
         "-f", "hls",
-        m3u8
+        playlist
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    await status.edit("☁ Uploading...")
+    await status.edit("☁ Uploading files...")
 
-    playlist_msg = await client.send_document(
-        CHANNEL_ID,
-        m3u8,
-        caption=f"HLS Playlist\n{filename}"
+    # ---- UPLOAD PLAYLIST ----
+    sent = await client.send_document(
+        chat_id=CHANNEL_ID,
+        document=playlist,
+        caption=f"HLS playlist for {filename}"
     )
 
-    for f in sorted(os.listdir(out_dir)):
-        if f.endswith(".ts"):
-            await client.send_document(CHANNEL_ID, f"{out_dir}/{f}")
+    # ---- UPLOAD SEGMENTS ----
+    for file in sorted(os.listdir(out_dir)):
+        if file.endswith(".ts"):
+            await client.send_document(
+                CHANNEL_ID,
+                f"{out_dir}/{file}"
+            )
 
-    # ✅ CORRECT LINK METHOD
-    link = f"https://t.me/{playlist_msg.chat.username}/{playlist_msg.id}"
+    # ✅ DIRECT FILE LINK (NO async generator)
+    file_path = sent.document.file_id
+    link = f"https://t.me/c/{str(CHANNEL_ID)[4:]}/{sent.id}"
 
     await status.edit(
-        f"✅ Done!\n\n"
-        f"📺 **HLS Playlist:**\n{link}"
+        f"✅ **HLS Ready**\n\n"
+        f"📺 Playlist Message:\n{link}"
     )
 
-# ───── RUN ─────
+# ---------- START ----------
 if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    app.run()
+    from threading import Thread
+    Thread(target=lambda: app.run(host="0.0.0.0", port=PORT)).start()
+    bot.run()
