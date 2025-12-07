@@ -1,64 +1,79 @@
 import os
-import uuid
-import asyncio
-import subprocess
 from pyrogram import Client, filters
 from flask import Flask
+import threading
 
-API_ID = int(os.environ["API_ID"])
-API_HASH = os.environ["API_HASH"]
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-CHANNEL = os.environ["CHANNEL_ID"]  # use @username
+API_ID = int(os.getenv("API_ID"))
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # must be PUBLIC channel
 
 bot = Client(
-    "filetolink",
+    "FileToLinkBot",
     api_id=API_ID,
     api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    bot_token=BOT_TOKEN,
+    in_memory=True
 )
 
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot is Alive ✅"
+    return "Bot is running ✅"
 
 
 @bot.on_message(filters.command("start"))
-async def start(_, m):
-    await m.reply(
-        "🎥 Send me a video\n\n"
-        "I will generate:\n"
-        "• Streaming link\n"
-        "• Download link\n"
-        "• File details"
+async def start(_, msg):
+    await msg.reply(
+        "✅ **Send me any video or file**\n\n"
+        "I will give you:\n"
+        "📁 File name\n"
+        "📦 File size\n"
+        "▶ Streaming link\n"
+        "⬇ Direct download link"
     )
 
 
 @bot.on_message(filters.private & (filters.video | filters.document))
 async def handle_file(client, message):
-    status = await message.reply("⬇ Downloading...")
+    status = await message.reply("⬆ Uploading file...")
 
-    media = message.video or message.document
-    name = media.file_name or "video.mp4"
-    size_mb = round(media.file_size / (1024 * 1024), 2)
+    try:
+        media = message.video or message.document
 
-    os.makedirs("tmp", exist_ok=True)
-    path = await client.download_media(message, file_name=f"tmp/{name}")
+        sent = await client.send_document(
+            chat_id=CHANNEL_ID,
+            document=media.file_id,
+            caption=f"📁 {media.file_name}"
+        )
 
-    await status.edit("☁ Uploading to channel...")
+        file = sent.document
+        file_name = file.file_name
+        file_size = round(file.file_size / (1024 * 1024), 2)
 
-    sent = await client.send_document(
-        CHANNEL,
-        path,
-        caption=f"📂 {name}\n📦 {size_mb} MB"
-    )
+        # ✅ Telegram auto-generates this path
+        file_path = file.file_id
+        download_link = f"https://t.me/{os.getenv('PUBLIC_CHANNEL_USERNAME')}/{sent.id}"
 
-    file_id = sent.document.file_id
-    file = await client.get_file(file_id)
+        result = (
+            "✅ **File Uploaded Successfully**\n\n"
+            f"📁 **Name:** `{file_name}`\n"
+            f"📦 **Size:** `{file_size} MB`\n\n"
+            f"▶ **Streaming Link:**\n{download_link}\n\n"
+            f"⬇ **Download Link:**\n{download_link}"
+        )
 
-    download = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
-    stream = download  # Telegram direct stream
+        await status.edit(result)
 
-    await status.edit(
-        f"✅ **Done!**\n\n"
+    except Exception as e:
+        await status.edit(f"❌ Error:\n`{e}`")
+
+
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
+
+
+if __name__ == "__main__":
+    threading.Thread(target=run_flask).start()
+    bot.run()
